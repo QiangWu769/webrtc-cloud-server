@@ -1,0 +1,16 @@
+# Ignore nested git repositories and their data
+**/.git/
+
+# Ignore massive Chromium/WebRTC source and toolchains
+src/
+# Large files and directories
+src/out/
+src/resources/
+src/third_party/
+test_video.yuv
+VCD_th_1920x1080_30.yuv
+6f05900f2375ca5a01202460975afd79_1920x1080_30.yuv
+VCD_th_1920x1080_30_90s.mp4
+VCD_th_1920x1080_30_90s_compressed.yuv
+webrtc_config_results/received_cloud.y4m
+webrtc_config_results/received_quick_test.y4m

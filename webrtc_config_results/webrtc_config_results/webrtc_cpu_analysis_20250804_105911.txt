@@ -1,0 +1,66 @@
+WebRTC传输过程CPU性能分析报告
+========================================
+
+采集信息:
+- 采集时间: Mon Aug  4 10:59:43 CST 2025
+- 采集时长: 30秒
+- 目标进程: 1266398
+- 采样频率: 99Hz
+
+文件信息:
+- 原始数据: webrtc_perf_20250804_105911.data (64K)
+- 调用栈数据: webrtc_stacks_20250804_105911.txt (74 行)
+- 火焰图: webrtc_cpu_flamegraph_20250804_105911.svg
+
+Top CPU消耗函数:
+正在分析CPU热点...
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 4  of event 'cycles'
+# Event count (approx.): 10359196
+#
+# Children      Self  Command          Shared Object          Symbol                                                                                                                                                      IPC   [IPC Coverage]
+# ........  ........  ...............  .....................  ..........................................................................................................................................................  ....................
+#
+    96.47%    96.47%  peerconnection_  peerconnection_server  [.] _ZNSt4__Cr6vectorIP13ChannelMemberNS_9allocatorIS2_EEE26__add_alignment_assumptionIPS2_TnNS_9enable_ifIXsr10is_pointerIT_EE5valueEiE4typeELi0EEES7_S9_  -      -            
+            |
+            ---__libc_start_call_main
+               main
+               PeerChannel::CheckForTimeout
+               _ZNSt4__Cr6vectorIP13ChannelMemberNS_9allocatorIS2_EEE26__add_alignment_assumptionIPS2_TnNS_9enable_ifIXsr10is_pointerIT_EE5valueEiE4typeELi0EEES7_S9_
+
+    96.47%     0.00%  peerconnection_  libc.so.6              [.] __libc_start_call_main                                                                                                                                  -      -            
+            |
+            ---__libc_start_call_main
+               main
+               PeerChannel::CheckForTimeout
+               _ZNSt4__Cr6vectorIP13ChannelMemberNS_9allocatorIS2_EEE26__add_alignment_assumptionIPS2_TnNS_9enable_ifIXsr10is_pointerIT_EE5valueEiE4typeELi0EEES7_S9_
+
+    96.47%     0.00%  peerconnection_  peerconnection_server  [.] main                                                                                                                                                    -      -            
+            |
+            ---main
+               PeerChannel::CheckForTimeout
+               _ZNSt4__Cr6vectorIP13ChannelMemberNS_9allocatorIS2_EEE26__add_alignment_assumptionIPS2_TnNS_9enable_ifIXsr10is_pointerIT_EE5valueEiE4typeELi0EEES7_S9_
+
+    96.47%     0.00%  peerconnection_  peerconnection_server  [.] PeerChannel::CheckForTimeout                                                                                                                            -      -            
+            |
+            ---PeerChannel::CheckForTimeout
+               _ZNSt4__Cr6vectorIP13ChannelMemberNS_9allocatorIS2_EEE26__add_alignment_assumptionIPS2_TnNS_9enable_ifIXsr10is_pointerIT_EE5valueEiE4typeELi0EEES7_S9_
+
+     3.53%     0.00%  peerconnection_  [unknown]              [k] 0000000000000000                                                                                                                                        -      -            
+            |
+            ---0
+               __select
+               entry_SYSCALL_64_after_hwframe
+               do_syscall_64
+               x64_sys_call
+               __x64_sys_pselect6
+               do_pselect.constprop.0
+               core_sys_select
+               do_select
+               schedule_hrtimeout_range
+               schedule_hrtimeout_range_clock
+               schedule

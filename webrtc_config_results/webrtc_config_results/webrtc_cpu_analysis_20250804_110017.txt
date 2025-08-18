@@ -1,0 +1,66 @@
+WebRTC传输过程CPU性能分析报告
+========================================
+
+采集信息:
+- 采集时间: Mon Aug  4 11:00:49 CST 2025
+- 采集时长: 30秒
+- 目标进程: 1266398
+- 采样频率: 99Hz
+
+文件信息:
+- 原始数据: webrtc_perf_20250804_110017.data (68K)
+- 调用栈数据: webrtc_stacks_20250804_110017.txt (514 行)
+- 火焰图: webrtc_cpu_flamegraph_20250804_110017.svg
+
+Top CPU消耗函数:
+正在分析CPU热点...
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 27  of event 'cycles'
+# Event count (approx.): 43668537
+#
+# Children      Self  Command          Shared Object          Symbol                                                                                                               IPC   [IPC Coverage]
+# ........  ........  ...............  .....................  ...................................................................................................................  ....................
+#
+    51.85%    51.85%  peerconnection_  libc.so.6              [.] malloc                                                                                                           -      -            
+            |
+            ---malloc
+
+    35.41%     0.00%  peerconnection_  libc.so.6              [.] __libc_start_call_main                                                                                           -      -            
+            |
+            ---__libc_start_call_main
+               main
+               |          
+               |--11.55%--ChannelMember::ForwardRequestToPeer
+               |          std::__Cr::basic_string<char, std::__Cr::char_traits<char>, std::__Cr::allocator<char> >::operator=
+               |          
+               |--11.55%--DataSocket::OnDataAvailable
+               |          std::__Cr::basic_string<char, std::__Cr::char_traits<char>, std::__Cr::allocator<char> >::append
+               |          std::__Cr::basic_string<char, std::__Cr::char_traits<char>, std::__Cr::allocator<char> >::__grow_by_and_replace
+               |          
+                --9.30%--DataSocket::~DataSocket
+                          SocketBase::~SocketBase
+                          __close
+                          entry_SYSCALL_64_after_hwframe
+                          do_syscall_64
+                          syscall_exit_to_user_mode
+                          exit_to_user_mode_prepare
+                          exit_to_user_mode_loop
+                          task_work_run
+                          ____fput
+                          __fput
+                          sock_close
+                          __sock_release
+                          inet_release
+                          tcp_close
+                          __tcp_close
+                          tcp_send_fin
+                          __tcp_push_pending_frames
+                          tcp_write_xmit
+                          __tcp_transmit_skb
+                          ip_queue_xmit
+                          __ip_queue_xmit
+                          ip_local_out

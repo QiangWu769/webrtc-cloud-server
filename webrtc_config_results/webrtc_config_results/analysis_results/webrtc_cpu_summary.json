@@ -1,0 +1,20 @@
+{
+  "analysis_summary": {
+    "total_hotspots": 1,
+    "top_cpu_consumer": "[.]",
+    "top_cpu_percent": 23.5,
+    "analysis_timestamp": 1754274209.2410083
+  },
+  "category_breakdown": {
+    "Other": {
+      "function_count": 1,
+      "total_cpu_percent": 23.5,
+      "average_cpu_percent": 23.5,
+      "max_cpu_percent": 23.5,
+      "top_function": "[.]"
+    }
+  },
+  "performance_insights": [
+    "WebRTC核心处理CPU占用较低，性能良好"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "format_version": "1.1",
+  "package_name": "infra/build/siso/linux-amd64",
+  "version_file": ".versions/siso.cipd_version",
+  "actual_install_mode": "copy",
+  "files": [
+    {
+      "name": "siso",
+      "size": 42528205,
+      "executable": true,
+      "hash": "vfynviDK-ww-CxtjmKsk-eKM0qpTrN9NL1Ta7VweonQC"
+    },
+    {
+      "name": ".versions/siso.cipd_version",
+      "size": 117,
+      "hash": "zeX2-HOjD-T4CN_89RzcdrAjalcXoL-nvHgmJydOBCQC"
+    }
+  ]
+}

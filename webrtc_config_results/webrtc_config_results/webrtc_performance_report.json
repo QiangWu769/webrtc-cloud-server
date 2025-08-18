@@ -1,0 +1,27 @@
+{
+  "summary": {
+    "total_events": 109,
+    "total_time_ms": 30206,
+    "analysis_timestamp": "2025-08-04T10:06:33.701085"
+  },
+  "categories": {
+    "RTP": {
+      "event_count": 5,
+      "total_time_ms": 96,
+      "average_time_ms": 19.2,
+      "max_time_ms": 46
+    },
+    "Threading": {
+      "event_count": 1,
+      "total_time_ms": 280,
+      "average_time_ms": 280.0,
+      "max_time_ms": 280
+    },
+    "VideoQuality": {
+      "event_count": 103,
+      "total_time_ms": 29830,
+      "average_time_ms": 289.61,
+      "max_time_ms": 430
+    }
+  }
+}
