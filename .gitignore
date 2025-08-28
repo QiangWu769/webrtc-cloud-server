@@ -16,4 +16,4 @@ webrtc_config_results/received_cloud.y4m
 webrtc_config_results/received_quick_test.y4m
 
 # exclude nested repo
-AlphaRTC
+# AlphaRTC  # Commented out to integrate AlphaRTC into main repository
