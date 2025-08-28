@@ -2,7 +2,7 @@
 **/.git/
 
 # Ignore massive Chromium/WebRTC source and toolchains
-src/
+# src/  # Commented out to integrate src into main repository
 # Large files and directories
 src/out/
 src/resources/
@@ -14,3 +14,6 @@ VCD_th_1920x1080_30_90s.mp4
 VCD_th_1920x1080_30_90s_compressed.yuv
 webrtc_config_results/received_cloud.y4m
 webrtc_config_results/received_quick_test.y4m
+
+# exclude nested repo
+AlphaRTC
