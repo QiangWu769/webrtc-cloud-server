@@ -113,7 +113,7 @@ const int kNackHistoryMs = 1000;
 const int kDefaultRtcpReceiverReportSsrc = 1;
 
 // Minimum time interval for logging stats.
-const int64_t kStatsLogIntervalMs = 10000;
+const int64_t kStatsLogIntervalMs = 1000;
 
 const char* StreamTypeToString(VideoSendStream::StreamStats::StreamType type) {
   switch (type) {
