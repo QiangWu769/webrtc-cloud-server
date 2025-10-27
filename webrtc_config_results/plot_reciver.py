@@ -22,7 +22,7 @@ class ReceiverQualityAnalyzer:
             # 匹配包含MonoTime时间戳的VideoQuality日志行
             'bitrate': re.compile(r'\[VideoQuality-Bitrate\] MonoTime: (\d+), SSRC: (\d+), Payload Bytes Received: (\d+)'),
             'framerate': re.compile(r'\[VideoQuality-FrameRate\] MonoTime: (\d+), SSRC: (\d+), Frames Received: (\d+), Frames Decoded: (\d+), Frames Dropped: (\d+), Decoded FPS: (\d+), Frame Size: (\d+)x(\d+)'),
-            'freeze': re.compile(r'\[VideoQuality-FreezeRate\] MonoTime: (\d+), SSRC: (\d+), Freeze Count: (\d+)'),
+            'freeze': re.compile(r'\[VideoQuality-FreezeRate\] MonoTime: (\d+), SSRC: (\d+), Freeze Count: (\d+), Total Freezes Duration \(ms\): (\d+), Pause Count: (\d+), Total Pauses Duration \(ms\): (\d+)'),
             'jitter': re.compile(r'\[VideoQuality-Jitter\] MonoTime: (\d+), SSRC: (\d+), Jitter \(ms\): (\d+\.?\d*)'),
             'packet_loss': re.compile(r'\[VideoQuality-PacketLoss\] MonoTime: (\d+), SSRC: (\d+), Packets Lost: (\d+)'),
             'qp': re.compile(r'\[VideoQuality-QP\] MonoTime: (\d+), SSRC: (\d+), QP Sum: (\d+), Average QP: (\d+\.?\d*)'),
@@ -83,8 +83,14 @@ class ReceiverQualityAnalyzer:
                     timestamp = int(freeze_match.group(1))
                     ssrc = int(freeze_match.group(2))
                     freeze_count = int(freeze_match.group(3))
+                    freeze_duration_ms = int(freeze_match.group(4))
+                    pause_count = int(freeze_match.group(5))
+                    pause_duration_ms = int(freeze_match.group(6))
                     aggregated_data[timestamp]['ssrc'] = ssrc
                     aggregated_data[timestamp]['freeze_count'] = freeze_count
+                    aggregated_data[timestamp]['freeze_duration_ms'] = freeze_duration_ms
+                    aggregated_data[timestamp]['pause_count'] = pause_count
+                    aggregated_data[timestamp]['pause_duration_ms'] = pause_duration_ms
                     continue
 
                 # 匹配网络抖动数据
@@ -157,6 +163,19 @@ class ReceiverQualityAnalyzer:
         else:
             df['bitrate_kbps'] = 0
 
+        # 计算冻结率
+        if 'freeze_duration_ms' in df.columns and len(df) > 1:
+            # 计算总的播放时间（从第一个数据点到最后一个数据点）
+            total_session_time_ms = df['timestamp'].max() - df['timestamp'].min()
+            
+            # 计算冻结率：(累计冻结时间 / 总播放时间) * 100%
+            if total_session_time_ms > 0:
+                df['freeze_rate_percent'] = (df['freeze_duration_ms'] / total_session_time_ms) * 100.0
+            else:
+                df['freeze_rate_percent'] = 0.0
+        else:
+            df['freeze_rate_percent'] = 0.0
+
         print(f"[*] 解析完成，共找到 {len(df)} 条聚合后的质量数据点。")
         
         # 显示前几行数据用于验证
@@ -175,6 +194,7 @@ class ReceiverQualityAnalyzer:
             'bitrate': (df['bitrate_kbps'] > 0).any() if 'bitrate_kbps' in df.columns else False,
             'framerate': (df['decoded_fps'] > 0).any() if 'decoded_fps' in df.columns else False,
             'freeze': (df['freeze_count'] >= 0).any() if 'freeze_count' in df.columns else False,
+            'freeze_rate': (df['freeze_rate_percent'] >= 0).any() if 'freeze_rate_percent' in df.columns else False,
             'jitter': (df['jitter_ms'] >= 0).any() if 'jitter_ms' in df.columns else False,
             'packet_loss': (df['packets_lost'] >= 0).any() if 'packets_lost' in df.columns else False,
             'qp': (df['avg_qp'] > 0).any() if 'avg_qp' in df.columns else False,
@@ -199,17 +219,18 @@ class ReceiverQualityAnalyzer:
 
     def plot_quality_metrics(self, df):
         """
-        使用解析出的数据绘制九合一的视频质量图表，按QoS和QoE分类：
+        使用解析出的数据绘制八合一的视频质量图表，按QoS和QoE分类：
         QoS（管道质量）：丢包、抖动
-        QoE（内容质量）：比特率、帧率、冻结、QP、分辨率、不可解码帧、端到端延迟
+        QoE（内容质量）：比特率、帧率、冻结、QP、分辨率、不可解码帧
         """
         if df.empty or len(df) < 2:
             print("[!] 数据不足，无法生成图表。")
             return None
 
         # 数据预处理 - 填充缺失的列
-        required_columns = ['timestamp', 'bitrate_kbps', 'decoded_fps', 'freeze_count', 'jitter_ms', 'packets_lost', 'avg_qp', 
-                           'width', 'height', 'undecodable_count', 'total_e2e_delay_ms']
+        required_columns = ['timestamp', 'bitrate_kbps', 'decoded_fps', 'freeze_count', 'freeze_rate_percent', 
+                           'freeze_duration_ms', 'jitter_ms', 'packets_lost', 'avg_qp',
+                           'width', 'height', 'undecodable_count']
         for col in required_columns:
             if col not in df.columns:
                 df[col] = 0 if col != 'total_e2e_delay_ms' else float('nan')
@@ -220,14 +241,6 @@ class ReceiverQualityAnalyzer:
             if pd.notna(row['width']) and pd.notna(row['height']) and row['width'] > 0 and row['height'] > 0
             else 'Unknown', axis=1
         )
-        
-        # 检测数据可用性
-        metrics_status = self.check_data_availability(df)
-        print(f"[*] 数据可用性检查:")
-        for metric, available in metrics_status.items():
-            status = "✅ Available" if available else "❌ Missing"
-            print(f"    {metric}: {status}")
-        print()
         
         df = df.dropna(subset=['timestamp']).reset_index(drop=True)
         if df.empty or len(df) < 2:
@@ -279,8 +292,8 @@ class ReceiverQualityAnalyzer:
                 print("[*] 未检测到明确的传输结束标志，显示全部数据")
         
         plt.style.use('seaborn-v0_8-whitegrid')
-        # 创建9个子图，竖直排列，统一时间轴
-        fig, axes = plt.subplots(9, 1, figsize=(16, 30), sharex=True)
+        # 创建8个子图，竖直排列，统一时间轴
+        fig, axes = plt.subplots(8, 1, figsize=(16, 26), sharex=True)
         fig.suptitle(f'WebRTC Receiver Video Quality Analysis (QoS + QoE)\n({self.log_file_path})', fontsize=16, fontweight='bold')
 
         # === QoS 指标 (管道质量) ===
@@ -335,16 +348,20 @@ class ReceiverQualityAnalyzer:
         axes[3].axhline(avg_fps, color='red', linestyle='--', alpha=0.7, label=f'Avg: {avg_fps:.1f} FPS')
         axes[3].legend(fontsize=10)
 
-        # 5. 视频冻结累计计数 (Freezes) - QoE指标
-        axes[4].plot(df['time_s'], df['freeze_count'], 'o-', color='red', label='Cumulative Freeze Count', markersize=3)
-        axes[4].fill_between(df['time_s'], df['freeze_count'], alpha=0.2, color='lightcoral')
-        axes[4].set_ylabel('Freeze Count', fontsize=11)
-        axes[4].set_title('QoE: Video Freeze Count Over Time', fontsize=12)
+        # 5. 视频冻结率 (Freeze Rate) - QoE指标
+        axes[4].plot(df['time_s'], df['freeze_rate_percent'], 'o-', color='red', label='Freeze Rate (%)', markersize=3)
+        axes[4].fill_between(df['time_s'], df['freeze_rate_percent'], alpha=0.2, color='lightcoral')
+        axes[4].set_ylabel('Freeze Rate (%)', fontsize=11)
+        axes[4].set_title('QoE: Video Freeze Rate Over Time', fontsize=12)
         axes[4].set_ylim(bottom=0)
         axes[4].grid(True, alpha=0.3)
-        total_freezes = df['freeze_count'].max() if not df['freeze_count'].isna().all() else 0
-        axes[4].text(0.02, 0.95, f'Total: {total_freezes:.0f}', transform=axes[4].transAxes, 
+        
+        # 显示最终冻结率
+        final_freeze_rate = df['freeze_rate_percent'].iloc[-1] if not df['freeze_rate_percent'].isna().all() and len(df) > 0 else 0
+        
+        axes[4].text(0.02, 0.95, f'Final: {final_freeze_rate:.2f}%', transform=axes[4].transAxes, 
                     bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.5), fontsize=10)
+        
         axes[4].legend(fontsize=10)
 
         # 6. 量化参数 (QP - 视频质量) - QoE指标
@@ -363,124 +380,74 @@ class ReceiverQualityAnalyzer:
         axes[5].legend(fontsize=10)
 
         # 7. 视频分辨率 (Resolution) - QoE指标
-        if metrics_status['resolution']:
-            # 有分辨率数据 - 显示分辨率级别变化
-            resolution_data = df[(df['width'] > 0) & (df['height'] > 0)].copy()
-            if not resolution_data.empty:
-                # 创建分辨率级别映射（用于Y轴显示）
-                resolution_levels = {
-                    '640x360': 1,
-                    '960x540': 2, 
-                    '1280x720': 3,
-                    '1920x1080': 4,
-                    '1920x1200': 5,
-                    '2560x1440': 6,
-                    '3840x2160': 7
-                }
-                
-                # 为每个数据点分配级别
-                df['resolution_level'] = df['resolution_label'].map(resolution_levels).fillna(0)
-                
-                # 使用步进图显示分辨率变化，保持连续性
-                df_filtered = df[df['resolution_level'] > 0].copy()
-                if len(df_filtered) > 0:
-                    # 对数据进行降采样，但保持连续性
-                    # 每隔10个数据点取一个，减少密度但保持连续
-                    step_size = max(1, len(df_filtered) // 200)  # 控制显示密度
-                    df_sampled = df_filtered.iloc[::step_size].copy()
-                    
-                    # 确保包含最后一个数据点以保持完整性
-                    if len(df_filtered) > 0 and df_filtered.index[-1] not in df_sampled.index:
-                        df_sampled = pd.concat([df_sampled, df_filtered.iloc[[-1]]])
-                    
-                    if len(df_sampled) > 0:
-                        # 绘制分辨率级别变化（使用步进线保持连续性）
-                        axes[6].step(df_sampled['time_s'], df_sampled['resolution_level'], where='post', color='brown', label='Resolution Level', linewidth=2)
-                        
-                        # 设置Y轴标签为实际分辨率
-                        yticks = []
-                        ylabels = []
-                        for res_label, level in resolution_levels.items():
-                            if level in df_sampled['resolution_level'].values and level > 0:
-                                yticks.append(level)
-                                ylabels.append(res_label)
-                        
-                        if yticks:
-                            axes[6].set_yticks(yticks)
-                            axes[6].set_yticklabels(ylabels, fontsize=9)
-            
-            axes[6].set_ylabel('Resolution', fontsize=11)
-            axes[6].set_title('QoE: Video Resolution Changes Over Time', fontsize=12)
-            axes[6].set_ylim(bottom=0, top=max(yticks) + 0.5 if yticks else 8)
-            axes[6].grid(True, alpha=0.3)
-            axes[6].legend(fontsize=10)
-        else:
-            # 无分辨率数据 - 显示占位符
-            self.plot_metric_placeholder(axes[6], 'resolution', 'Video Resolution')
+        yticks = []  # 初始化yticks变量
+        resolution_data = df[(df['width'] > 0) & (df['height'] > 0)].copy()
+        if not resolution_data.empty:
+            # 创建分辨率级别映射（用于Y轴显示）
+            resolution_levels = {
+                '640x360': 1,
+                '960x540': 2,
+                '1280x720': 3,
+                '1920x1080': 4,
+                '1920x1200': 5,
+                '2560x1440': 6,
+                '3840x2160': 7
+            }
+
+            # 为每个数据点分配级别
+            df['resolution_level'] = df['resolution_label'].map(resolution_levels).fillna(0)
+
+            # 使用步进图显示分辨率变化，保持连续性
+            df_filtered = df[df['resolution_level'] > 0].copy()
+            if len(df_filtered) > 0:
+                # 对数据进行降采样，但保持连续性
+                # 每隔10个数据点取一个，减少密度但保持连续
+                step_size = max(1, len(df_filtered) // 200)  # 控制显示密度
+                df_sampled = df_filtered.iloc[::step_size].copy()
+
+                # 确保包含最后一个数据点以保持完整性
+                if len(df_filtered) > 0 and df_filtered.index[-1] not in df_sampled.index:
+                    df_sampled = pd.concat([df_sampled, df_filtered.iloc[[-1]]])
+
+                if len(df_sampled) > 0:
+                    # 绘制分辨率级别变化（使用步进线保持连续性）
+                    axes[6].step(df_sampled['time_s'], df_sampled['resolution_level'], where='post', color='brown', label='Resolution Level', linewidth=2)
+
+                    # 设置Y轴标签为实际分辨率
+                    ylabels = []
+                    for res_label, level in resolution_levels.items():
+                        if level in df_sampled['resolution_level'].values and level > 0:
+                            yticks.append(level)
+                            ylabels.append(res_label)
+
+                    if yticks:
+                        axes[6].set_yticks(yticks)
+                        axes[6].set_yticklabels(ylabels, fontsize=9)
+
+        axes[6].set_ylabel('Resolution', fontsize=11)
+        axes[6].set_title('QoE: Video Resolution Changes Over Time', fontsize=12)
+        axes[6].set_ylim(bottom=0, top=max(yticks) + 0.5 if yticks else 8)
+        axes[6].grid(True, alpha=0.3)
+        axes[6].legend(fontsize=10)
 
         # 8. 不可解码帧数量 (Undecodable Frames Count) - QoE指标
-        if metrics_status['undecodable']:
-            # 有不可解码帧数据 - 显示绝对数量变化
-            axes[7].plot(df['time_s'], df['undecodable_count'], 'o-', color='darkred', label='Undecodable Frame Count', markersize=3)
-            axes[7].fill_between(df['time_s'], df['undecodable_count'], alpha=0.2, color='mistyrose')
-            axes[7].set_ylabel('Undecodable Count', fontsize=11)
-            axes[7].set_title('QoE: Undecodable Frame Count Over Time', fontsize=12)
-            axes[7].set_ylim(bottom=0)
-            axes[7].grid(True, alpha=0.3)
-            
-            # 显示总的不可解码帧数
-            total_undecodable = df['undecodable_count'].max() if not df['undecodable_count'].isna().all() else 0
-            axes[7].text(0.02, 0.95, f'Peak: {total_undecodable:.0f} frames', 
-                        transform=axes[7].transAxes, 
-                        bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.5), 
-                        fontsize=10)
-            axes[7].legend(fontsize=10)
-        else:
-            # 无不可解码帧数据 - 显示占位符
-            self.plot_metric_placeholder(axes[7], 'undecodable', 'Undecodable Frame Count')
+        axes[7].plot(df['time_s'], df['undecodable_count'], 'o-', color='darkred', label='Undecodable Frame Count', markersize=3)
+        axes[7].fill_between(df['time_s'], df['undecodable_count'], alpha=0.2, color='mistyrose')
+        axes[7].set_ylabel('Undecodable Count', fontsize=11)
+        axes[7].set_title('QoE: Undecodable Frame Count Over Time', fontsize=12)
+        axes[7].set_ylim(bottom=0)
+        axes[7].grid(True, alpha=0.3)
 
-        # 9. 端到端延迟 (End-to-End Delay) - QoE指标 - 显示真实的延迟组件
-        if metrics_status['e2e_delay']:
-            # 有端到端延迟数据 - 显示多个真实的延迟组件
-            delay_data = df[df['total_e2e_delay_ms'].notna() & (df['total_e2e_delay_ms'] > 0)].copy()
-            
-            if not delay_data.empty:
-                # 绘制多个延迟组件
-                x_data = delay_data['time_s'].values
-                
-                # 主延迟：当前播放延迟 (current_delay_ms)
-                axes[8].plot(x_data, delay_data['current_delay_ms'], 'o-', color='indigo', label='Current Playout Delay (ms)', markersize=4, linewidth=2)
-                
-                # 目标延迟作为参考线
-                if (delay_data['target_delay_ms'] > 0).any():
-                    axes[8].plot(x_data, delay_data['target_delay_ms'], '--', color='orange', label='Target Delay (ms)', alpha=0.7, linewidth=1.5)
-                
-                # 抖动缓冲延迟
-                if (delay_data['jitter_delay_ms'] > 0).any():
-                    axes[8].plot(x_data, delay_data['jitter_delay_ms'], ':', color='green', label='Jitter Buffer Delay (ms)', alpha=0.8, linewidth=1.5)
-                
-                # 解码延迟
-                if (delay_data['decode_ms'] > 0).any():
-                    axes[8].plot(x_data, delay_data['decode_ms'], '-.', color='purple', label='Decode Delay (ms)', alpha=0.8, linewidth=1)
-                
-                # 填充当前延迟区域
-                axes[8].fill_between(x_data, delay_data['current_delay_ms'], alpha=0.2, color='lavender')
-                
-                # 显示平均延迟
-                avg_current_delay = delay_data['current_delay_ms'].mean()
-                axes[8].axhline(avg_current_delay, color='red', linestyle='--', alpha=0.7, label=f'Avg Current: {avg_current_delay:.1f} ms')
-            
-            axes[8].set_ylabel('Delay (ms)', fontsize=11)
-            axes[8].set_title('QoE: End-to-End Delay Components (Real Data)', fontsize=12)
-            axes[8].set_ylim(bottom=0)
-            axes[8].grid(True, alpha=0.3)
-            axes[8].legend(fontsize=9, loc='upper left')
-        else:
-            # 无端到端延迟数据 - 显示占位符
-            self.plot_metric_placeholder(axes[8], 'e2e_delay', 'End-to-End Delay')
+        # 显示总的不可解码帧数
+        total_undecodable = df['undecodable_count'].max() if not df['undecodable_count'].isna().all() else 0
+        axes[7].text(0.02, 0.95, f'Peak: {total_undecodable:.0f} frames',
+                    transform=axes[7].transAxes,
+                    bbox=dict(boxstyle="round,pad=0.3", facecolor="yellow", alpha=0.5),
+                    fontsize=10)
+        axes[7].legend(fontsize=10)
 
         # 只为最后一个图添加x轴标签
-        axes[8].set_xlabel('Time (seconds)', fontsize=12)
+        axes[7].set_xlabel('Time (seconds)', fontsize=12)
         
         # 设置所有子图的x轴范围，只显示有效数据传输的时间段
         for ax in axes:
@@ -493,7 +460,7 @@ class ReceiverQualityAnalyzer:
 
 def main():
     # 修改为你的接收端日志文件路径
-    receiver_log_file = '/root/webrtc-cloud-server/webrtc_config_results/receiver_cloud.log' 
+    receiver_log_file = '/home/administrator/webrtc-cloud-server/webrtc_config_results/receiver_cloud.log' 
     
     try:
         analyzer = ReceiverQualityAnalyzer(receiver_log_file)

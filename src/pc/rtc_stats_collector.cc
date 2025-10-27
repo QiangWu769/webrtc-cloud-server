@@ -733,6 +733,25 @@
                     << ", Pause Count: " << video_receiver_info.pause_count
                     << ", Total Pauses Duration (ms): " << video_receiver_info.total_pauses_duration_ms
                     << ", Session Experienced Freezes: " << (video_receiver_info.freeze_count > 0 ? "YES" : "NO");
+  
+  // **计算Rebuffering Ratio (卡顿占比) - 核心QoE指标**
+  double rebuffering_ratio = 0.0;
+  uint32_t playback_duration_ms = static_cast<uint32_t>(video_receiver_info.total_inter_frame_delay * 1000);
+  
+  // 只有当有实际播放时长时才计算比率，避免除零错误
+  if (playback_duration_ms > 0 && video_receiver_info.total_freezes_duration_ms > 0) {
+    rebuffering_ratio = static_cast<double>(video_receiver_info.total_freezes_duration_ms) / 
+                       static_cast<double>(playback_duration_ms);
+  }
+  
+  // **添加三个核心卡顿指标日志 - 业界标准组合**
+  RTC_LOG(LS_INFO) << "[" << GetWallClockTimestampString() << "] "
+                   << "[VideoQuality-CoreFreeze] MonoTime: " << TimeMillis()
+                   << ", SSRC: " << video_receiver_info.ssrc()
+                   << ", Freeze Count: " << video_receiver_info.freeze_count
+                   << ", Total Freeze Duration (ms): " << video_receiver_info.total_freezes_duration_ms
+                   << ", Rebuffering Ratio: " << std::fixed << std::setprecision(4) << rebuffering_ratio
+                   << ", Playback Duration (ms): " << playback_duration_ms;
    inbound_video->min_playout_delay =
        static_cast<double>(video_receiver_info.min_playout_delay_ms) /
        kNumMillisecsPerSec;
