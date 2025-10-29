@@ -39,6 +39,8 @@ rtc_library("video") {
     "buffered_frame_decryptor.h",
     "call_stats2.cc",
     "call_stats2.h",
+    "ntp_time_converter.cc",
+    "ntp_time_converter.h",
     "encoder_rtcp_feedback.cc",
     "encoder_rtcp_feedback.h",
     "quality_limitation_reason_tracker.cc",

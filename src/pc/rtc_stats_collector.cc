@@ -745,12 +745,14 @@
   }
   
   // **添加三个核心卡顿指标日志 - 业界标准组合**
+  char ratio_str[32];
+  snprintf(ratio_str, sizeof(ratio_str), "%.4f", rebuffering_ratio);
   RTC_LOG(LS_INFO) << "[" << GetWallClockTimestampString() << "] "
                    << "[VideoQuality-CoreFreeze] MonoTime: " << TimeMillis()
                    << ", SSRC: " << video_receiver_info.ssrc()
                    << ", Freeze Count: " << video_receiver_info.freeze_count
                    << ", Total Freeze Duration (ms): " << video_receiver_info.total_freezes_duration_ms
-                   << ", Rebuffering Ratio: " << std::fixed << std::setprecision(4) << rebuffering_ratio
+                   << ", Rebuffering Ratio: " << ratio_str
                    << ", Playback Duration (ms): " << playback_duration_ms;
    inbound_video->min_playout_delay =
        static_cast<double>(video_receiver_info.min_playout_delay_ms) /

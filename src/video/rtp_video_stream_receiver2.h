@@ -68,6 +68,7 @@
 #include "rtc_base/system/no_unique_address.h"
 #include "rtc_base/thread_annotations.h"
 #include "video/buffered_frame_decryptor.h"
+#include "video/ntp_time_converter.h"
 #include "video/unique_timestamp_counter.h"
 
 namespace webrtc {
@@ -463,6 +464,9 @@ class RtpVideoStreamReceiver2 : public LossNotificationSender,
 
   CaptureClockOffsetUpdater capture_clock_offset_updater_
       RTC_GUARDED_BY(packet_sequence_checker_);
+
+  // C2R: NTP时间转换器，用于统一时间域
+  NtpTimeConverter ntp_converter_;
 
   int64_t last_completed_picture_id_ = 0;
 

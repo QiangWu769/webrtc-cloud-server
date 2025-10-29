@@ -91,8 +91,10 @@
 #include "rtc_base/numerics/sequence_number_util.h"
 #include "rtc_base/strings/string_builder.h"
 #include "rtc_base/thread.h"
+#include "rtc_base/time_utils.h"
 #include "system_wrappers/include/ntp_time.h"
 #include "video/buffered_frame_decryptor.h"
+#include "../c2r_log_util.h"
 
 namespace webrtc {
 
@@ -380,6 +382,9 @@ RtpVideoStreamReceiver2::RtpVideoStreamReceiver2(
             Thread::Current(), config_.rtp.remote_ssrc);
     frame_transformer_delegate_->Init();
   }
+
+  // C2R: 初始化NTP时间转换器
+  ntp_converter_.Initialize();
 }
 
 RtpVideoStreamReceiver2::~RtpVideoStreamReceiver2() {
@@ -586,6 +591,19 @@ bool RtpVideoStreamReceiver2::OnReceivedPayloadData(
                                  /*receive_time=*/env_.clock().CurrentTime()))
           .first->second;
 
+  // C2R调试：检查RTP包级别的ACT扩展
+  auto act_extension = rtp_packet.GetExtension<AbsoluteCaptureTimeExtension>();
+  if (act_extension.has_value()) {
+    RTC_LOG(LS_INFO) << "[C2R-ACT-PARSE] Seq=" << rtp_packet.SequenceNumber()
+                     << ", RtpTs=" << rtp_packet.Timestamp()
+                     << ", ActTimestamp=" << act_extension->absolute_capture_timestamp
+                     << ", Ssrc=" << rtp_packet.Ssrc();
+  } else if (rtp_packet.SequenceNumber() % 100 == 0) {
+    RTC_LOG(LS_INFO) << "[C2R-ACT-NO-EXT] Seq=" << rtp_packet.SequenceNumber()
+                     << ", RtpTs=" << rtp_packet.Timestamp()
+                     << ", Ssrc=" << rtp_packet.Ssrc();
+  }
+
   // Try to extrapolate absolute capture time if it is missing.
   packet_info.set_absolute_capture_time(
       absolute_capture_time_interpolator_.OnReceivePacket(
@@ -594,7 +612,7 @@ bool RtpVideoStreamReceiver2::OnReceivedPayloadData(
           packet_info.rtp_timestamp(),
           // Assume frequency is the same one for all video frames.
           kVideoPayloadTypeFrequency,
-          rtp_packet.GetExtension<AbsoluteCaptureTimeExtension>()));
+          act_extension));
   if (packet_info.absolute_capture_time().has_value()) {
     packet_info.set_local_capture_clock_offset(
         capture_clock_offset_updater_.ConvertsToTimeDela(
@@ -894,14 +912,52 @@ void RtpVideoStreamReceiver2::OnInsertedPacket(
       max_nack_count = packet->times_nacked;
       min_recv_time = packet_info.receive_time().ms();
       max_recv_time = packet_info.receive_time().ms();
-      if (env_.field_trials().IsEnabled("WebRTC-UseAbsCapTimeForG2gMetric") &&
-          packet_info.absolute_capture_time().has_value() &&
-          packet_info.local_capture_clock_offset().has_value()) {
-        absolute_capture_time_ms =
-            NtpTime(
-                packet_info.absolute_capture_time()->absolute_capture_timestamp)
-                .ToMs() +
-            packet_info.local_capture_clock_offset()->ms();
+      // C2R改进：总是使用ACT扩展的NTP时间（如果可用）
+      if (packet_info.absolute_capture_time().has_value()) {
+        // C2R ACT扩展记录
+        uint64_t act_timestamp = packet_info.absolute_capture_time()->absolute_capture_timestamp;
+        
+        // C2R统一日志格式：ACT接收事件
+        int64_t mono_us = webrtc::TimeMicros();
+        int64_t ntp_us = ntp_converter_.MonotonicToNtpMicros(mono_us);
+        
+        // 正确的NTP时间戳转换：ACT是64位NTP格式，转换为微秒
+        NtpTime ntp_time(act_timestamp);
+        uint64_t act_capture_us = ntp_time.seconds() * 1000000ULL + 
+                                 ((ntp_time.fractions() * 1000000ULL) >> 32);
+        
+        // 统一NTP时间域的延迟计算
+        int64_t unified_delay_us = ntp_us - static_cast<int64_t>(act_capture_us);
+        
+        RTC_LOG(LS_INFO) << "[C2R-ACT-RX] RtpTs=" << first_packet->timestamp
+                         << ", Ssrc=" << config_.rtp.remote_ssrc
+                         << ", SeqNum=" << first_packet->seq_num()
+                         << ", RxUs=" << mono_us
+                         << ", RxNtpUs=" << ntp_us
+                         << ", ActCaptureUs=" << act_capture_us
+                         << ", RelativeDelayUs=" << unified_delay_us;
+        
+        // 优先使用带本地时钟偏移的精确时间
+        if (packet_info.local_capture_clock_offset().has_value()) {
+          absolute_capture_time_ms =
+              NtpTime(
+                  packet_info.absolute_capture_time()->absolute_capture_timestamp)
+                  .ToMs() +
+              packet_info.local_capture_clock_offset()->ms();
+        } else {
+          // 即使没有本地时钟偏移，也使用原始ACT时间
+          absolute_capture_time_ms =
+              NtpTime(
+                  packet_info.absolute_capture_time()->absolute_capture_timestamp)
+                  .ToMs();
+        }
+      } else {
+        // 调试：记录ACT缺失（每100包记录一次）
+        if (first_packet->seq_num() % 100 == 0) {
+          RTC_LOG(LS_INFO) << "[C2R-ACT-MISSING] Seq=" << first_packet->seq_num()
+                           << ", RtpTs=" << first_packet->timestamp
+                           << ", Ssrc=" << config_.rtp.remote_ssrc;
+        }
       }
     } else {
       max_nack_count = std::max(max_nack_count, packet->times_nacked);
@@ -914,6 +970,7 @@ void RtpVideoStreamReceiver2::OnInsertedPacket(
     packet->video_header.absolute_capture_time =
         packet_info.absolute_capture_time();
     if (packet->is_last_packet_in_frame()) {
+      
       auto depacketizer_it = payload_type_map_.find(first_packet->payload_type);
       RTC_CHECK(depacketizer_it != payload_type_map_.end());
       RTC_CHECK(depacketizer_it->second);
@@ -962,6 +1019,31 @@ void RtpVideoStreamReceiver2::OnAssembledFrame(
     std::unique_ptr<RtpFrameObject> frame) {
   RTC_DCHECK_RUN_ON(&packet_sequence_checker_);
   RTC_DCHECK(frame);
+
+  // C2R帧元数据日志 - 完整帧组装完成时记录ACT信息
+  if (C2RLogUtil::IsC2RLogEnabled()) {
+    // 检查帧是否有NTP时间戳（通常来自ACT扩展）
+    int64_t ntp_time_ms = frame->NtpTimeMs();
+    if (ntp_time_ms > 0) {
+      int64_t frame_assembly_us = webrtc::TimeMicros(); // 完整帧组装完成时间
+      uint64_t cap_ntp_us = static_cast<uint64_t>(ntp_time_ms * 1000); // ms转us
+      uint32_t frame_id = static_cast<uint32_t>(frame->first_seq_num()); // 使用首包序号作为FrameId
+      uint32_t rtp_ts = frame->RtpTimestamp();
+      uint32_t ssrc = config_.rtp.remote_ssrc;
+      
+      RTC_LOG(LS_INFO) << "[C2R-FRAME-META] MonoUs=" << frame_assembly_us
+                       << ", FrameId=" << frame_id
+                       << ", RtpTs=" << rtp_ts
+                       << ", CaptureNtpUs=" << cap_ntp_us
+                       << ", Ssrc=" << ssrc;
+    } else if (frame->first_seq_num() % 100 == 0) {
+      // 调试：每100帧记录一次NTP时间状态
+      RTC_LOG(LS_INFO) << "[C2R-DEBUG] Frame NtpTimeMs=" << ntp_time_ms 
+                       << ", SeqNum=" << frame->first_seq_num()
+                       << ", RtpTs=" << frame->RtpTimestamp()
+                       << ", Ssrc=" << config_.rtp.remote_ssrc;
+    }
+  }
 
   const std::optional<RTPVideoHeader::GenericDescriptorInfo>& descriptor =
       frame->GetRtpVideoHeader().generic;
@@ -1033,6 +1115,29 @@ void RtpVideoStreamReceiver2::OnCompleteFrames(
 
     last_completed_picture_id_ =
         std::max(last_completed_picture_id_, frame->Id());
+    
+    // C2R统一日志格式：帧组装完成 (NTP时间域统一)
+    if (C2RLogUtil::IsC2RLogEnabled()) {
+      int64_t mono_us = webrtc::TimeMicros();
+      int64_t ntp_us = ntp_converter_.MonotonicToNtpMicros(mono_us);
+      
+      // 尝试从ACT扩展获取采集时间进行E2E延迟计算
+      int64_t ntp_time_ms = frame->NtpTimeMs();
+      if (ntp_time_ms > 0) {
+        uint64_t capture_us = static_cast<uint64_t>(ntp_time_ms * 1000);
+        // 统一NTP时间域的延迟计算
+        int64_t unified_delay_us = ntp_us - static_cast<int64_t>(capture_us);
+        double unified_delay_ms = unified_delay_us / 1000.0;
+        
+        RTC_LOG(LS_INFO) << "[C2R-E2E-ASSEMBLED] RtpTs=" << frame->RtpTimestamp()
+                         << ", Ssrc=" << config_.rtp.remote_ssrc
+                         << ", DelayMs=" << unified_delay_ms
+                         << ", CaptureUs=" << capture_us
+                         << ", ASSEMBLEDUs=" << mono_us
+                         << ", ASSEMBLEDNtpUs=" << ntp_us;
+      }
+    }
+    
     complete_frame_callback_->OnCompleteFrame(std::move(frame));
   }
 }

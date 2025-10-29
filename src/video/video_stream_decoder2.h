@@ -17,6 +17,7 @@
 #include "api/video/video_sink_interface.h"
 #include "api/video_codecs/video_decoder.h"
 #include "modules/video_coding/include/video_coding_defines.h"
+#include "video/ntp_time_converter.h"
 
 namespace webrtc {
 
@@ -44,6 +45,9 @@ class VideoStreamDecoder : public VCMReceiveCallback {
   VideoReceiver2* const video_receiver_;
   ReceiveStatisticsProxy* const receive_stats_callback_;
   VideoSinkInterface<VideoFrame>* const incoming_video_stream_;
+  
+  // C2R: NTP时间转换器，用于统一时间域
+  NtpTimeConverter ntp_converter_;
 };
 
 }  // namespace internal

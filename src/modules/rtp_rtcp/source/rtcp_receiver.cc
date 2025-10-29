@@ -66,7 +66,9 @@
 #include "rtc_base/containers/flat_map.h"
 #include "rtc_base/logging.h"
 #include "rtc_base/synchronization/mutex.h"
+#include "rtc_base/time_utils.h"
 #include "rtc_base/trace_event.h"
+#include "../../c2r_log_util.h"
 #include "system_wrappers/include/clock.h"
 #include "system_wrappers/include/ntp_time.h"
 
@@ -547,6 +549,20 @@ bool RTCPReceiver::HandleSenderReport(const CommonHeader& rtcp_block,
   if (remote_ssrc_ == remote_ssrc) {
     // Only signal that we have received a SR when we accept one.
     packet_information->packet_type_flags |= kRtcpSr;
+
+    // C2R SR锚点日志 - 简化版
+    if (C2RLogUtil::IsC2RLogEnabled()) {
+      int64_t rx_mono_us = webrtc::TimeMicros();
+      NtpTime sr_ntp = sender_report.ntp();
+      uint64_t sr_ntp_us = sr_ntp.seconds() * 1000000ULL + 
+                           ((sr_ntp.fractions() * 1000000ULL) >> 32);
+      uint32_t rtp_ts = sender_report.rtp_timestamp();
+      
+      RTC_LOG(LS_INFO) << "[C2R-SR-RX] MonoUs=" << rx_mono_us 
+                       << ", SrNtpUs=" << sr_ntp_us 
+                       << ", RtpTs=" << rtp_ts 
+                       << ", Ssrc=" << remote_ssrc;
+    }
 
     remote_sender_.last_remote_ntp_timestamp = sender_report.ntp();
     remote_sender_.last_remote_rtp_timestamp = sender_report.rtp_timestamp();

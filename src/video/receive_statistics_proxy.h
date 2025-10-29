@@ -66,6 +66,7 @@ class ReceiveStatisticsProxy : public VideoStreamBufferControllerStatsObserver,
   ~ReceiveStatisticsProxy() override;
 
   VideoReceiveStreamInterface::Stats GetStats() const;
+  uint32_t GetRemoteSsrc() const { return remote_ssrc_; }
 
   void OnDecodedFrame(const VideoFrame& frame,
                       std::optional<uint8_t> qp,
