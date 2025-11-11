@@ -69,6 +69,7 @@ class Conductor : public webrtc::PeerConnectionObserver,
   void DeletePeerConnection();
   void EnsureStreamingUI();
   void AddTracks();
+  void SetVP9CodecPreference();
 
   //
   // PeerConnectionObserver implementation.
@@ -154,6 +155,12 @@ class Conductor : public webrtc::PeerConnectionObserver,
   webrtc::RepeatingTaskHandle stats_collection_task_;
   void StartStatsCollection();
   void OnStatsDelivered(const webrtc::scoped_refptr<const webrtc::RTCStatsReport>& report);
+
+  // Clock synchronization periodic update
+  std::unique_ptr<webrtc::TaskQueueBase, webrtc::TaskQueueDeleter> clock_sync_task_queue_;
+  webrtc::RepeatingTaskHandle clock_sync_task_;
+  void StartClockSyncUpdates();
+  void UpdateClockSync();
   
   // Video duration calculation for file-based transmission
   int CalculateVideoDurationFromFile(const std::string& file_path, int width, int height, int fps);

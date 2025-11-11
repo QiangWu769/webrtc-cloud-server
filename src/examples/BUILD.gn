@@ -669,6 +669,8 @@ if (is_linux || is_chromeos || is_win) {
   rtc_executable("peerconnection_client") {
     testonly = true
     sources = [
+      "peerconnection/client/clock_sync_helper.cc",
+      "peerconnection/client/clock_sync_helper.h",
       "peerconnection/client/conductor.cc",
       "peerconnection/client/conductor.h",
       "peerconnection/client/defaults.cc",

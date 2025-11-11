@@ -19,6 +19,8 @@
 #include <utility>
 #include <variant>
 
+#include "examples/peerconnection/client/clock_sync_helper.h"
+
 #include "absl/algorithm/container.h"
 #include "api/field_trials_view.h"
 #include "api/units/time_delta.h"
@@ -239,6 +241,62 @@ void VCMDecodedFrameCallback::Decoded(VideoFrame& decodedImage,
 
   decodedImage.set_timestamp_us(
       frame_info->render_time ? frame_info->render_time->us() : -1);
+
+  // C2R: Clock offset estimation and delay calculation
+  static int64_t min_total_delay_ms = INT64_MAX;
+  static int sample_count = 0;
+
+  int64_t sender_ntp_ms = decodedImage.ntp_time_ms();
+  int64_t receiver_ntp_ms = _clock->CurrentNtpInMilliseconds();
+  int64_t total_delay_ms = receiver_ntp_ms - sender_ntp_ms;
+
+  // Track minimum delay (baseline)
+  if (total_delay_ms < min_total_delay_ms && total_delay_ms > 0) {
+    min_total_delay_ms = total_delay_ms;
+  }
+
+  // Get clock offset delta if initialized
+  std::optional<double> clock_offset_delta = ClockSyncHelper::GetClockOffsetDelta();
+
+  // Calculate corrected delay
+  int64_t corrected_delay_ms = total_delay_ms;
+  if (clock_offset_delta.has_value()) {
+    // sender_time is in sender's clock, receiver_time is in receiver's clock
+    // To align: sender_time_in_receiver_clock = sender_time - delta
+    // where delta = sender_offset - receiver_offset
+    // delay = receiver_time - sender_time_in_receiver_clock
+    //       = receiver_time - (sender_time - delta)
+    //       = (receiver_time - sender_time) + delta
+    //       = total_delay_ms + delta
+    // But wait, we want the opposite: remove the offset from the delay
+    // Actually: total_delay = receiver_ntp - sender_ntp
+    // If sender is fast by +X ms, sender_ntp is X ms ahead
+    // Real delay = total_delay - X
+    corrected_delay_ms = total_delay_ms - static_cast<int64_t>(*clock_offset_delta);
+  }
+
+  sample_count++;
+  if (sample_count % 100 == 0) {  // Every 100 frames
+    int64_t current_jitter_ms = total_delay_ms - min_total_delay_ms;
+
+    if (clock_offset_delta.has_value()) {
+      RTC_LOG(LS_INFO) << "[C2R-CLOCK-ANALYSIS] "
+                       << "RawDelay=" << total_delay_ms << "ms, "
+                       << "ClockOffset=" << *clock_offset_delta << "ms, "
+                       << "CorrectedDelay=" << corrected_delay_ms << "ms, "
+                       << "MinDelay=" << min_total_delay_ms << "ms, "
+                       << "Jitter=" << current_jitter_ms << "ms, "
+                       << "Count=" << sample_count;
+    } else {
+      RTC_LOG(LS_INFO) << "[C2R-CLOCK-ANALYSIS] "
+                       << "RawDelay=" << total_delay_ms << "ms, "
+                       << "MinDelay=" << min_total_delay_ms << "ms, "
+                       << "Jitter=" << current_jitter_ms << "ms, "
+                       << "Count=" << sample_count
+                       << " [CLOCK OFFSET NOT INITIALIZED]";
+    }
+  }
+
   _receiveCallback->OnFrameToRender({.video_frame = decodedImage,
                                      .qp = qp,
                                      .decode_time = decode_time,

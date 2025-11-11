@@ -17,6 +17,8 @@
  #include <string>
  #include <utility>
  #include <vector>
+
+ #include "examples/peerconnection/client/clock_sync_helper.h"
  
  #include "absl/base/nullability.h"
  #include "absl/flags/declare.h"
@@ -258,26 +260,23 @@
  
  Conductor::~Conductor() {
    RTC_DCHECK(!peer_connection_);
-   
-   // Stop stats collection task
-   if (stats_collection_task_.Running()) {
-     RTC_LOG(LS_INFO) << "Stopping video quality stats collection task";
-     stats_collection_task_.Stop();
-   }
-   
-   // Clean up stats task queue
+
+   // Signal stats collection to stop
+   stats_timer_started_ = false;
+
+   // Clean up stats task queue (this will stop any running tasks)
    if (stats_task_queue_) {
-     RTC_LOG(LS_INFO) << "Cleaning up stats task queue";
+     RTC_LOG(LS_INFO) << "Cleaning up stats task queue (will stop running tasks)";
      stats_task_queue_.reset();
    }
-   
+
    // Clean up video frame writer
    if (video_frame_writer_) {
      RTC_LOG(LS_INFO) << "Cleaning up VideoFrameWriter";
      video_frame_writer_.reset();
    }
-   
- 
+
+
  }
  
  bool Conductor::connection_active() const {
@@ -372,6 +371,8 @@
      for (const auto& sender : senders) {
        peer_connection_->AddTrack(sender->track(), sender->stream_ids());
      }
+     // Set VP9 codec preference before creating offer
+     SetVP9CodecPreference();
      peer_connection_->CreateOffer(
          this, webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
    }
@@ -403,14 +404,13 @@
  void Conductor::DeletePeerConnection() {
    main_wnd_->StopLocalRenderer();
    main_wnd_->StopRemoteRenderer();
-   
-   // Stop stats collection before clearing peer connection
+
+   // Signal stats collection to stop (will stop on next iteration)
+   // Note: Don't call Stop() here as it causes thread safety issues
+   // The task will stop automatically when it checks stats_timer_started_
    stats_timer_started_ = false;
-   if (stats_collection_task_.Running()) {
-     RTC_LOG(LS_INFO) << "Stopping video quality stats collection due to peer connection cleanup";
-     stats_collection_task_.Stop();
-   }
-   
+   RTC_LOG(LS_INFO) << "Signaled stats collection to stop (will complete on next iteration)";
+
    peer_connection_ = nullptr;
    peer_connection_factory_ = nullptr;
    peer_id_ = -1;
@@ -434,11 +434,27 @@
      const std::vector<webrtc::scoped_refptr<webrtc::MediaStreamInterface>>&
          streams) {
    RTC_LOG(LS_INFO) << __FUNCTION__ << " " << receiver->id();
-   
+
    auto track = receiver->track();
    if (track->kind() == webrtc::MediaStreamTrackInterface::kVideoKind) {
      RTC_LOG(LS_INFO) << "Received video track: " << track->id();
-     
+
+     // Initialize clock synchronization on first video track (receiver side)
+     static bool clock_sync_initialized = false;
+     if (!clock_sync_initialized) {
+       webrtc::ClockSyncInfo local_info = webrtc::ClockSyncHelper::GetLocalClockOffset();
+       if (local_info.valid) {
+         RTC_LOG(LS_WARNING) << "[CLOCK-SYNC-INIT] Receiver (local) clock offset: "
+                             << local_info.offset_ms << "ms, "
+                             << "dispersion: " << local_info.dispersion_ms << "ms";
+         RTC_LOG(LS_WARNING) << "[CLOCK-SYNC-INIT] Waiting for sender's clock offset via signaling...";
+       }
+       clock_sync_initialized = true;
+
+       // Start periodic clock sync updates (every 1 second)
+       StartClockSyncUpdates();
+     }
+
      // Check if video output is enabled in configuration
      if (config_ && config_->save_to_file()) {
        RTC_LOG(LS_INFO) << "Video output enabled, creating VideoFrameWriter";
@@ -529,9 +545,14 @@
  }
  
  void Conductor::OnPeerDisconnected(int id) {
-   RTC_LOG(LS_INFO) << __FUNCTION__;
+   RTC_LOG(LS_INFO) << __FUNCTION__ << " peer_id=" << id;
    if (id == peer_id_) {
-     RTC_LOG(LS_INFO) << "Our peer disconnected";
+     RTC_LOG(LS_INFO) << "Our peer disconnected, resetting peer_id immediately";
+     // IMPORTANT: Reset peer_id_ immediately to prevent race condition
+     // where OnMessageFromPeer might be called before UIThreadCallback processes deletion
+     peer_id_ = -1;
+
+     // Queue the UI callback for actual cleanup
      main_wnd_->QueueUIThreadCallback(PEER_CONNECTION_CLOSED, nullptr);
    } else {
      // Refresh the list if we're showing it.
@@ -541,24 +562,37 @@
  }
  
  void Conductor::OnMessageFromPeer(int peer_id, const std::string& message) {
-   RTC_DCHECK(peer_id_ == peer_id || peer_id_ == -1);
+   // Note: Removed strict DCHECK to handle reconnection scenarios gracefully
    RTC_DCHECK(!message.empty());
- 
+
    if (!peer_connection_.get()) {
-     RTC_DCHECK(peer_id_ == -1);
+     // No active connection, accept this peer
+     RTC_LOG(LS_INFO) << "No active connection, accepting peer " << peer_id;
      peer_id_ = peer_id;
- 
+
      if (!InitializePeerConnection()) {
        RTC_LOG(LS_ERROR) << "Failed to initialize our PeerConnection instance";
        client_->SignOut();
        return;
      }
    } else if (peer_id != peer_id_) {
-     RTC_DCHECK(peer_id_ != -1);
+     // Received message from different peer while already connected
+     // This can happen when signaling server doesn't notify OnPeerDisconnected
      RTC_LOG(LS_WARNING)
-         << "Received a message from unknown peer while already in a "
-            "conversation with a different peer.";
-     return;
+         << "Received message from different peer (new=" << peer_id
+         << ", current=" << peer_id_ << "). Cleaning up old connection.";
+
+     // Clean up old connection gracefully
+     DeletePeerConnection();
+
+     // Accept the new peer
+     peer_id_ = peer_id;
+
+     if (!InitializePeerConnection()) {
+       RTC_LOG(LS_ERROR) << "Failed to initialize our PeerConnection instance for new peer";
+       client_->SignOut();
+       return;
+     }
    }
  
    Json::CharReaderBuilder factory;
@@ -576,6 +610,38 @@
    webrtc::GetStringFromJsonObject(jmessage, kSessionDescriptionTypeName,
                                    &type_str);
    if (!type_str.empty()) {
+     // Check for clock_sync message first
+     if (type_str == "clock_sync") {
+       double offset_ms = 0.0;
+       double dispersion_ms = 0.0;
+
+       if (webrtc::GetDoubleFromJsonObject(jmessage, "offset_ms", &offset_ms) &&
+           webrtc::GetDoubleFromJsonObject(jmessage, "dispersion_ms", &dispersion_ms)) {
+         RTC_LOG(LS_WARNING) << "[CLOCK-SYNC] Received remote clock offset: "
+                            << offset_ms << "ms, dispersion: " << dispersion_ms << "ms";
+         webrtc::ClockSyncHelper::SetRemoteClockOffset(offset_ms, dispersion_ms);
+       } else {
+         RTC_LOG(LS_WARNING) << "Invalid clock_sync message format";
+       }
+       return;
+     }
+
+     // Check for clock_sync_update message
+     if (type_str == "clock_sync_update") {
+       double offset_ms = 0.0;
+       double dispersion_ms = 0.0;
+
+       if (webrtc::GetDoubleFromJsonObject(jmessage, "offset_ms", &offset_ms) &&
+           webrtc::GetDoubleFromJsonObject(jmessage, "dispersion_ms", &dispersion_ms)) {
+         RTC_LOG(LS_INFO) << "[CLOCK-SYNC-UPDATE] Received updated remote clock offset: "
+                          << offset_ms << "ms, dispersion: " << dispersion_ms << "ms";
+         webrtc::ClockSyncHelper::SetRemoteClockOffset(offset_ms, dispersion_ms);
+       } else {
+         RTC_LOG(LS_WARNING) << "Invalid clock_sync_update message format";
+       }
+       return;
+     }
+
      if (type_str == "offer-loopback") {
        // This is a loopback call.
        // Recreate the peerconnection with DTLS disabled.
@@ -615,10 +681,13 @@
          DummySetSessionDescriptionObserver::Create().get(),
          session_description.release());
      if (type == webrtc::SdpType::kOffer) {
+       // Set VP9 codec preference before creating answer
+       SetVP9CodecPreference();
        peer_connection_->CreateAnswer(
            this, webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
      }
    } else {
+     // Handle ICE candidate
      std::string sdp_mid;
      int sdp_mlineindex = 0;
      std::string sdp;
@@ -685,6 +754,8 @@
  
    if (InitializePeerConnection()) {
      peer_id_ = peer_id;
+     // Set VP9 codec preference before creating offer
+     SetVP9CodecPreference();
      peer_connection_->CreateOffer(
          this, webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
    } else {
@@ -827,8 +898,11 @@
    } else {
      RTC_LOG(LS_INFO) << "No video track created - video disabled in configuration";
    }
- 
-   main_wnd_->SwitchToStreamingUI();
+
+   // Only switch to streaming UI if not already there (to avoid recreating draw_area_)
+   if (main_wnd_->current_ui() != MainWindow::STREAMING) {
+     main_wnd_->SwitchToStreamingUI();
+   }
    
    // =================================================================
    // Only set an auto-close timer if we are the sender.
@@ -984,9 +1058,28 @@
    jmessage[kSessionDescriptionTypeName] =
        webrtc::SdpTypeToString(desc->GetType());
    jmessage[kSessionDescriptionSdpName] = sdp;
- 
+
    Json::StreamWriterBuilder factory;
    SendMessage(Json::writeString(factory, jmessage));
+
+   // Send clock sync information after SDP
+   static bool clock_sync_sent = false;
+   if (!clock_sync_sent && desc->GetType() == webrtc::SdpType::kOffer) {
+     // Only sender (offer creator) sends clock sync
+     webrtc::ClockSyncInfo local_info = webrtc::ClockSyncHelper::GetLocalClockOffset();
+     if (local_info.valid) {
+       Json::Value sync_message;
+       sync_message["type"] = "clock_sync";
+       sync_message["offset_ms"] = local_info.offset_ms;
+       sync_message["dispersion_ms"] = local_info.dispersion_ms;
+
+       SendMessage(Json::writeString(factory, sync_message));
+       RTC_LOG(LS_WARNING) << "[CLOCK-SYNC] Sent local clock offset: "
+                          << local_info.offset_ms << "ms, dispersion: "
+                          << local_info.dispersion_ms << "ms";
+       clock_sync_sent = true;
+     }
+   }
  }
  
  void Conductor::OnFailure(webrtc::RTCError error) {
@@ -1002,20 +1095,24 @@
  
  void Conductor::StartStatsCollection() {
    RTC_LOG(LS_INFO) << "Starting video quality stats collection (every 100ms - 10 times per second)";
-   
+
    if (!peer_connection_) {
      RTC_LOG(LS_WARNING) << "Cannot start stats collection: no peer connection";
      return;
    }
-   
-   // Stop any existing stats collection task
-   if (stats_collection_task_.Running()) {
-     stats_collection_task_.Stop();
+
+   // Signal any existing stats collection to stop
+   stats_timer_started_ = false;
+
+   // Destroy old task queue if it exists (this safely stops all tasks)
+   if (stats_task_queue_) {
+     RTC_LOG(LS_INFO) << "Cleaning up old stats task queue before creating new one";
+     stats_task_queue_.reset();
    }
-   
+
    // Enable stats collection timer
    stats_timer_started_ = true;
-   
+
    // Create task queue for stats collection
    stats_task_queue_ = env_.task_queue_factory().CreateTaskQueue("StatsCollection", webrtc::TaskQueueFactory::Priority::NORMAL);
    
@@ -1028,12 +1125,13 @@
          auto callback = webrtc::scoped_refptr<webrtc::RTCStatsCollectorCallback>(
              new webrtc::RefCountedObject<StatsCallback>(this));
          peer_connection_->GetStats(callback.get());
-         
+
          RTC_LOG(LS_INFO) << "Video quality stats collection executed";
          return webrtc::TimeDelta::Millis(100);  // Repeat every 100ms (10 times per second)
        } else {
-         RTC_LOG(LS_INFO) << "Stopping stats collection - no peer connection or timer stopped";
-         return webrtc::TimeDelta::Zero();  // Stop the task
+         // Don't log here - it creates infinite log spam!
+         // Task will be cleaned up when stats_task_queue_ is destroyed
+         return webrtc::TimeDelta::Millis(1000);  // Sleep for 1 second and check again
        }
      }
    );
@@ -1049,7 +1147,65 @@
    // The actual logging happens in rtc_stats_collector.cc functions
    // which are called during report generation
  }
- 
+
+ void Conductor::StartClockSyncUpdates() {
+   RTC_LOG(LS_INFO) << "Starting periodic clock sync updates (every 0.5 second)";
+
+   if (clock_sync_task_queue_) {
+     RTC_LOG(LS_INFO) << "Cleaning up old clock sync task queue before creating new one";
+     clock_sync_task_queue_.reset();
+   }
+
+   // Create task queue for clock sync updates
+   clock_sync_task_queue_ = env_.task_queue_factory().CreateTaskQueue(
+       "ClockSync", webrtc::TaskQueueFactory::Priority::NORMAL);
+
+   // Create repeating task for periodic clock sync updates
+   clock_sync_task_ = webrtc::RepeatingTaskHandle::DelayedStart(
+     clock_sync_task_queue_.get(),
+     webrtc::TimeDelta::Millis(500),  // Start after 500ms
+     [this]() {
+       UpdateClockSync();
+       return webrtc::TimeDelta::Millis(500);  // Repeat every 500ms (0.5 second)
+     }
+   );
+ }
+
+ void Conductor::UpdateClockSync() {
+   // Query local NTP offset
+   webrtc::ClockSyncInfo local_info = webrtc::ClockSyncHelper::GetLocalClockOffset();
+
+   if (!local_info.valid) {
+     RTC_LOG(LS_WARNING) << "[CLOCK-SYNC-UPDATE] Failed to query local NTP offset";
+     return;
+   }
+
+   // If we're the sender and have a connection, send updated offset to receiver
+   if (peer_connection_ && peer_connection_->signaling_state() ==
+       webrtc::PeerConnectionInterface::SignalingState::kStable) {
+
+     // Check if we're the sender (has local video track)
+     if (video_track_) {
+       Json::StreamWriterBuilder factory;
+       Json::Value sync_message;
+       sync_message["type"] = "clock_sync_update";
+       sync_message["offset_ms"] = local_info.offset_ms;
+       sync_message["dispersion_ms"] = local_info.dispersion_ms;
+
+       SendMessage(Json::writeString(factory, sync_message));
+
+       RTC_LOG(LS_INFO) << "[CLOCK-SYNC-UPDATE] Sent updated clock offset: "
+                        << local_info.offset_ms << "ms, dispersion: "
+                        << local_info.dispersion_ms << "ms";
+     } else {
+       // We're the receiver, just log the local update
+       RTC_LOG(LS_INFO) << "[CLOCK-SYNC-UPDATE] Local NTP offset: "
+                        << local_info.offset_ms << "ms, dispersion: "
+                        << local_info.dispersion_ms << "ms";
+     }
+   }
+ }
+
  int Conductor::CalculateVideoDurationFromFile(const std::string& file_path, int width, int height, int fps) {
    if (file_path.empty() || width <= 0 || height <= 0 || fps <= 0) {
      RTC_LOG(LS_ERROR) << "Invalid parameters for video duration calculation";
@@ -1090,6 +1246,51 @@
    
    return duration_int;
  }
- 
- 
+
+void Conductor::SetVP9CodecPreference() {
+  if (!peer_connection_) {
+    RTC_LOG(LS_WARNING) << "Cannot set codec preference: no peer connection";
+    return;
+  }
+
+  // Get all transceivers
+  auto transceivers = peer_connection_->GetTransceivers();
+
+  for (auto& transceiver : transceivers) {
+    if (transceiver->media_type() == webrtc::MediaType::VIDEO) {
+      RTC_LOG(LS_INFO) << "Setting VP9 codec preference for video transceiver";
+
+      // Get all supported codecs
+      std::vector<webrtc::RtpCodecCapability> codecs =
+          peer_connection_factory_->GetRtpSenderCapabilities(webrtc::MediaType::VIDEO).codecs;
+
+      // Filter to only VP9 codecs and put them first
+      std::vector<webrtc::RtpCodecCapability> preferred_codecs;
+      std::vector<webrtc::RtpCodecCapability> other_codecs;
+
+      for (const auto& codec : codecs) {
+        if (codec.name == "VP9") {
+          preferred_codecs.push_back(codec);
+          RTC_LOG(LS_INFO) << "Found VP9 codec: " << codec.name
+                           << " (mime_type: " << codec.mime_type() << ")";
+        } else {
+          other_codecs.push_back(codec);
+        }
+      }
+
+      // Put VP9 first, then other codecs as fallback
+      preferred_codecs.insert(preferred_codecs.end(), other_codecs.begin(), other_codecs.end());
+
+      // Set the codec preference
+      webrtc::RTCError error = transceiver->SetCodecPreferences(preferred_codecs);
+      if (error.ok()) {
+        RTC_LOG(LS_INFO) << "✅ Successfully set VP9 as preferred codec";
+      } else {
+        RTC_LOG(LS_ERROR) << "❌ Failed to set codec preference: " << error.message();
+      }
+    }
+  }
+}
+
+
  
