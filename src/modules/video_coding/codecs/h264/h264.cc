@@ -31,6 +31,7 @@
 
 #if defined(WEBRTC_USE_H264)
 #include "modules/video_coding/codecs/h264/h264_decoder_impl.h"
+#include "modules/video_coding/codecs/h264/h264_decoder_openh264_impl.h"
 #include "modules/video_coding/codecs/h264/h264_encoder_impl.h"
 #endif
 
@@ -167,8 +168,8 @@ std::unique_ptr<H264Decoder> H264Decoder::Create() {
   RTC_DCHECK(H264Decoder::IsSupported());
 #if defined(WEBRTC_USE_H264)
   RTC_CHECK(g_rtc_use_h264);
-  RTC_LOG(LS_INFO) << "Creating H264DecoderImpl.";
-  return std::make_unique<H264DecoderImpl>();
+  RTC_LOG(LS_INFO) << "Creating H264DecoderOpenH264Impl.";
+  return std::make_unique<H264DecoderOpenH264Impl>();
 #else
   RTC_DCHECK_NOTREACHED();
   return nullptr;

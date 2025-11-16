@@ -480,6 +480,8 @@ rtc_library("webrtc_h264") {
     "codecs/h264/h264_color_space.h",
     "codecs/h264/h264_decoder_impl.cc",
     "codecs/h264/h264_decoder_impl.h",
+    "codecs/h264/h264_decoder_openh264_impl.cc",
+    "codecs/h264/h264_decoder_openh264_impl.h",
     "codecs/h264/h264_encoder_impl.cc",
     "codecs/h264/h264_encoder_impl.h",
     "codecs/h264/include/h264.h",
@@ -527,7 +529,10 @@ rtc_library("webrtc_h264") {
     if (rtc_system_openh264) {
       configs += [ ":openh264" ]
     } else {
-      deps += [ "//third_party/openh264:encoder" ]
+      deps += [
+        "//third_party/openh264:encoder",
+        "//third_party/openh264:decoder",
+      ]
     }
     if (!build_with_mozilla) {
       deps += [ "../../media:rtc_media_base" ]

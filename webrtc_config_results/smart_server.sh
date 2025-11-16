@@ -34,11 +34,11 @@ rm -f /tmp/.X99-lock 2>/dev/null || true
 sleep 2
 
 # 确定工作目录
-cd /home/administrator/webrtc-cloud-server
+cd /mnt/data/webrtc-cloud-server
 echo "📂 工作目录: $(pwd)"
 
 # 本地IP（用于发送端模式）
-PUBLIC_IP="173.208.210.62"
+PUBLIC_IP="35.229.115.62"
 echo "🌐 本地IP: $PUBLIC_IP"
 
 # 启动基础服务
