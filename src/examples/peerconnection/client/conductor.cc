@@ -371,8 +371,8 @@
      for (const auto& sender : senders) {
        peer_connection_->AddTrack(sender->track(), sender->stream_ids());
      }
-     // Set VP9 codec preference before creating offer
-     SetVP9CodecPreference();
+     // Set H.264 codec preference before creating offer
+     SetH264CodecPreference();
      peer_connection_->CreateOffer(
          this, webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
    }
@@ -681,8 +681,8 @@
          DummySetSessionDescriptionObserver::Create().get(),
          session_description.release());
      if (type == webrtc::SdpType::kOffer) {
-       // Set VP9 codec preference before creating answer
-       SetVP9CodecPreference();
+       // Set H.264 codec preference before creating answer
+       SetH264CodecPreference();
        peer_connection_->CreateAnswer(
            this, webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
      }
@@ -754,8 +754,8 @@
  
    if (InitializePeerConnection()) {
      peer_id_ = peer_id;
-     // Set VP9 codec preference before creating offer
-     SetVP9CodecPreference();
+     // Set H.264 codec preference before creating offer
+     SetH264CodecPreference();
      peer_connection_->CreateOffer(
          this, webrtc::PeerConnectionInterface::RTCOfferAnswerOptions());
    } else {
@@ -1247,7 +1247,7 @@
    return duration_int;
  }
 
-void Conductor::SetVP9CodecPreference() {
+void Conductor::SetH264CodecPreference() {
   if (!peer_connection_) {
     RTC_LOG(LS_WARNING) << "Cannot set codec preference: no peer connection";
     return;
@@ -1258,33 +1258,63 @@ void Conductor::SetVP9CodecPreference() {
 
   for (auto& transceiver : transceivers) {
     if (transceiver->media_type() == webrtc::MediaType::VIDEO) {
-      RTC_LOG(LS_INFO) << "Setting VP9 codec preference for video transceiver";
+      RTC_LOG(LS_INFO) << "Setting H.264 codec preference for video transceiver";
 
-      // Get all supported codecs
+      // Get all supported codecs from the receiver capabilities
       std::vector<webrtc::RtpCodecCapability> codecs =
-          peer_connection_factory_->GetRtpSenderCapabilities(webrtc::MediaType::VIDEO).codecs;
+          peer_connection_factory_->GetRtpReceiverCapabilities(webrtc::MediaType::VIDEO).codecs;
 
-      // Filter to only VP9 codecs and put them first
+      RTC_LOG(LS_INFO) << "Total codecs available: " << codecs.size();
+
+      // 按优先级重新排序：H.264 > VP8 > VP9 > AV1
       std::vector<webrtc::RtpCodecCapability> preferred_codecs;
-      std::vector<webrtc::RtpCodecCapability> other_codecs;
 
+      // 1. 优先 H.264
       for (const auto& codec : codecs) {
-        if (codec.name == "VP9") {
+        if (codec.name == "H264") {
           preferred_codecs.push_back(codec);
-          RTC_LOG(LS_INFO) << "Found VP9 codec: " << codec.name
-                           << " (mime_type: " << codec.mime_type() << ")";
-        } else {
-          other_codecs.push_back(codec);
+          RTC_LOG(LS_INFO) << "  - Added H.264 codec (priority 1)";
         }
       }
 
-      // Put VP9 first, then other codecs as fallback
-      preferred_codecs.insert(preferred_codecs.end(), other_codecs.begin(), other_codecs.end());
+      // 2. 其次 VP8
+      for (const auto& codec : codecs) {
+        if (codec.name == "VP8") {
+          preferred_codecs.push_back(codec);
+          RTC_LOG(LS_INFO) << "  - Added VP8 codec (priority 2)";
+        }
+      }
+
+      // 3. 再次 VP9
+      for (const auto& codec : codecs) {
+        if (codec.name == "VP9") {
+          preferred_codecs.push_back(codec);
+          RTC_LOG(LS_INFO) << "  - Added VP9 codec (priority 3)";
+        }
+      }
+
+      // 4. 最后 AV1
+      for (const auto& codec : codecs) {
+        if (codec.name == "AV1") {
+          preferred_codecs.push_back(codec);
+          RTC_LOG(LS_INFO) << "  - Added AV1 codec (priority 4)";
+        }
+      }
+
+      // 5. 添加其他编解码器（red, ulpfec等）
+      for (const auto& codec : codecs) {
+        if (codec.name != "H264" && codec.name != "VP8" &&
+            codec.name != "VP9" && codec.name != "AV1") {
+          preferred_codecs.push_back(codec);
+        }
+      }
+
+      RTC_LOG(LS_INFO) << "Codec priority order set: " << preferred_codecs.size() << " codecs";
 
       // Set the codec preference
       webrtc::RTCError error = transceiver->SetCodecPreferences(preferred_codecs);
       if (error.ok()) {
-        RTC_LOG(LS_INFO) << "✅ Successfully set VP9 as preferred codec";
+        RTC_LOG(LS_INFO) << "✅ Successfully set H.264 as preferred codec";
       } else {
         RTC_LOG(LS_ERROR) << "❌ Failed to set codec preference: " << error.message();
       }

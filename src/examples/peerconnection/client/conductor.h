@@ -69,7 +69,7 @@ class Conductor : public webrtc::PeerConnectionObserver,
   void DeletePeerConnection();
   void EnsureStreamingUI();
   void AddTracks();
-  void SetVP9CodecPreference();
+  void SetH264CodecPreference();
 
   //
   // PeerConnectionObserver implementation.
