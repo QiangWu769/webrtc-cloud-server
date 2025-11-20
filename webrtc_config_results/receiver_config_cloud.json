@@ -6,12 +6,12 @@
   },
   "video_output": {
     "enabled": true,
-    "file_path": "/home/administrator/webrtc-cloud-server/webrtc_config_results/received_cloud.y4m",
+    "file_path": "/home/wujiaoshou769/webrtc-cloud-server/webrtc_config_results/received_cloud.y4m",
     "width": 1920, "height": 1080, "fps": 30
   },
   "logging": {
     "level": "info", "save_to_file": true,
-    "log_output_path": "/home/administrator/webrtc-cloud-server/webrtc_config_results/receiver_cloud.log"
+    "log_output_path": "/home/wujiaoshou769/webrtc-cloud-server/webrtc_config_results/receiver_cloud.log"
   },
   "server": {
     "host": "localhost",
